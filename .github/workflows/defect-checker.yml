@@ -1,8 +1,6 @@
 name: Defect Label Checker
 
 on:
-  schedule:
-    - cron: '0 * * * *'    # auto-runs every hour
   issues:
     types: [opened, edited, labeled, unlabeled]
 
@@ -13,95 +11,49 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - name: Check all open issues
+      - name: Check labels and assignee
         uses: actions/github-script@v7
         with:
           script: |
-            // Get all open issues in the repo
-            const issues = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              per_page: 100
-            });
+            const issue = context.payload.issue;
+            if (issue.pull_request) return;
 
-            for (const issue of issues.data) {
-              const labels = issue.labels.map(l => l.name);
-              const assignee = issue.assignee;
-              const missing = [];
+            const labels = issue.labels.map(l => l.name);
+            const assignee = issue.assignee;
+            const missing = [];
 
-              // Skip pull requests (GitHub treats PRs as issues too)
-              if (issue.pull_request) continue;
+            if (!labels.includes('bug')) {
+              missing.push('Missing label: `bug`');
+            }
+            if (!labels.some(l => l.startsWith('severity:'))) {
+              missing.push('Missing label: `severity:high`, `severity:medium` or `severity:low`');
+            }
+            const components = ['frontend', 'backend', 'api', 'infra'];
+            if (!labels.some(l => components.includes(l))) {
+              missing.push('Missing component label — one of: `frontend`, `backend`, `api`, `infra`');
+            }
+            if (!assignee) {
+              missing.push('No assignee set');
+            }
 
-              // Check 1 — must have 'bug' label
-              if (!labels.includes('bug')) {
-                missing.push('Missing label: `bug`');
-              }
+            if (missing.length > 0) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: [
+                  '⚠️ **This defect is missing required information:**',
+                  '',
+                  ...missing.map(m => `- ${m}`),
+                  '',
+                  'Please fix the above so this issue can be triaged properly.'
+                ].join('\n')
+              });
 
-              // Check 2 — must have a severity label
-              if (!labels.some(l => l.startsWith('severity:'))) {
-                missing.push('Missing label: `severity:high`, `severity:medium` or `severity:low`');
-              }
-
-              // Check 3 — must have a component label
-              const components = ['frontend', 'backend', 'api', 'infra'];
-              if (!labels.some(l => components.includes(l))) {
-                missing.push('Missing component label — one of: `frontend`, `backend`, `api`, `infra`');
-              }
-
-              // Check 4 — must have an assignee
-              if (!assignee) {
-                missing.push('No assignee set');
-              }
-
-              if (missing.length > 0) {
-                // Only post a comment if one hasn't been posted already
-                const comments = await github.rest.issues.listComments({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issue.number
-                });
-
-                const alreadyCommented = comments.data.some(
-                  c => c.user.login === 'github-actions[bot]' &&
-                       c.body.includes('missing required information')
-                );
-
-                // Post comment only if bot hasn't commented before
-                if (!alreadyCommented) {
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue.number,
-                    body: [
-                      '⚠️ **This defect is missing required information:**',
-                      '',
-                      ...missing.map(m => `- ${m}`),
-                      '',
-                      'Please fix the above so this issue can be triaged properly.'
-                    ].join('\n')
-                  });
-                }
-
-                // Add needs-triage label if not already there
-                if (!labels.includes('needs-triage')) {
-                  await github.rest.issues.addLabels({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue.number,
-                    labels: ['needs-triage']
-                  });
-                }
-
-              } else {
-                // Remove needs-triage if everything is now fixed
-                if (labels.includes('needs-triage')) {
-                  await github.rest.issues.removeLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue.number,
-                    name: 'needs-triage'
-                  });
-                }
-              }
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['needs-triage']
+              });
             }
