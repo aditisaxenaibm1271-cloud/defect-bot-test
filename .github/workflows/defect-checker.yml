@@ -1,0 +1,80 @@
+name: Defect Label Checker
+
+on:
+  issues:
+    types: [opened, edited, labeled, unlabeled]
+
+permissions:
+  issues: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check labels and assignee
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const labels = issue.labels.map(l => l.name);
+            const assignee = issue.assignee;
+            const missing = [];
+
+            // Check 1 — must have 'bug' label
+            if (!labels.includes('bug')) {
+              missing.push('Missing label: `bug`');
+            }
+
+            // Check 2 — must have a severity label
+            const hasSeverity = labels.some(l => l.startsWith('severity:'));
+            if (!hasSeverity) {
+              missing.push('Missing label: `severity:high`, `severity:medium` or `severity:low`');
+            }
+
+            // Check 3 — must have a component label
+            const components = ['frontend', 'backend', 'api', 'infra'];
+            const hasComponent = labels.some(l => components.includes(l));
+            if (!hasComponent) {
+              missing.push('Missing component label — one of: `frontend`, `backend`, `api`, `infra`');
+            }
+
+            // Check 4 — must have an assignee
+            if (!assignee) {
+              missing.push('No assignee set — please assign someone to triage this');
+            }
+
+            // If anything is missing — post a comment and add needs-triage label
+            if (missing.length > 0) {
+              const body = [
+                '⚠️ **This defect is missing required information:**',
+                '',
+                ...missing.map(m => `- ${m}`),
+                '',
+                'Please fix the above so this issue can be triaged properly.'
+              ].join('\n');
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body
+              });
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                labels: ['needs-triage']
+              });
+
+            // If everything is fine — remove needs-triage label if present
+            } else {
+              if (labels.includes('needs-triage')) {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  name: 'needs-triage'
+                });
+              }
+            }
